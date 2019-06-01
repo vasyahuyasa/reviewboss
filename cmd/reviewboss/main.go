@@ -2,10 +2,13 @@ package main
 
 import (
 	"log"
+	"net/http"
 
 	"database/sql"
 
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/vasyahuyasa/reviewboss/internal/web"
 	gitlab "github.com/xanzy/go-gitlab"
 )
 
@@ -28,5 +31,20 @@ func main() {
 	err = mengine.run()
 	if err != nil {
 		log.Fatalf("Can not apply migrations: %v", err)
+	}
+
+	bot, err := tgbotapi.NewBotAPI(cfg.TelegramBotToken)
+	if err != nil {
+		log.Fatalf("Can not initialize telegram bot: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	webServer := web.NewServer(bot)
+	webServer.RegisterRoutes(mux)
+
+	log.Println("Listen 0.0.0.0:6789")
+	err = http.ListenAndServe("0.0.0.0:6789", mux)
+	if err != nil {
+		log.Fatalf("Web server error: %v", err)
 	}
 }

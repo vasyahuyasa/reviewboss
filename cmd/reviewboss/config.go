@@ -5,9 +5,10 @@ import (
 )
 
 type config struct {
-	GitlabToken   string
-	GitlabBaseURL string
-	DbPath        string
+	GitlabToken      string
+	GitlabBaseURL    string
+	DbPath           string
+	TelegramBotToken string
 }
 
 func loadConfig() *config {
@@ -29,6 +30,9 @@ func loadConfig() *config {
 		path = "data.db"
 	}
 	cfg.DbPath = path
+
+	// telegram
+	cfg.TelegramBotToken = os.Getenv("TELEGRAM_BOT_TOKEN")
 
 	return cfg
 }
