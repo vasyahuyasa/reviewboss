@@ -1,2 +1,3 @@
 cmd/reviewboss/reviewboss
 cmd/reviewboss/data.db
+cmd/reviewboss/.env

@@ -2,6 +2,8 @@ package main
 
 import (
 	"os"
+
+	_ "github.com/joho/godotenv/autoload"
 )
 
 type config struct {

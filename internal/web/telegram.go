@@ -8,5 +8,3 @@ import (
 func telegramHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Request from telegram:", r)
 }
-
-func telegramUpdate(telegram.)
