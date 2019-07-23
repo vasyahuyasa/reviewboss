@@ -1,15 +1,17 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
+
+	"github.com/vasyahuyasa/reviewboss/internal/web"
 
 	"database/sql"
 
 	//tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/vasyahuyasa/reviewboss/internal/review/dummyroom"
+	"github.com/vasyahuyasa/reviewboss/internal/core/review"
+	"github.com/vasyahuyasa/reviewboss/internal/core/review/dummylister"
 	gitlab "github.com/xanzy/go-gitlab"
 )
 
@@ -42,28 +44,21 @@ func main() {
 		bot.Debug = true
 		log.Printf("Authorized on account %s", bot.Self.UserName)
 	*/
-	room := &dummyroom.Room{}
-	//brain := review.NewBrain(room)
+	brain := review.NewBrain(&dummylister.Lister{})
+	reviewHandlers := &web.ReviewHandlers{Brain: brain}
 
 	mux := http.NewServeMux()
+	server := web.NewServer(mux, reviewHandlers)
+	server.RegisterRoutes()
 
-	mux.HandleFunc("/reviwers", func(w http.ResponseWriter, r *http.Request) {
-		e := json.NewEncoder(w)
-
-		reviwers, _ := room.List()
-		err := e.Encode(reviwers)
-		if err != nil {
-			log.Println("can not encode list of reviwers")
-		}
-	})
 	/*
 		webServer := web.NewServer(bot)
 		webServer.RegisterRoutes(mux)
 		webServer.RunTelegram()
 	*/
 
-	log.Println("Listen 0.0.0.0:6789")
-	err = http.ListenAndServe("0.0.0.0:6789", mux)
+	log.Println("Listen http://0.0.0.0:6789")
+	err = server.Listen("0.0.0.0:6789")
 	if err != nil {
 		log.Fatalf("Web server error: %v", err)
 	}

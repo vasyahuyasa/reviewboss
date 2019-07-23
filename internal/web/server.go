@@ -1,23 +1,27 @@
 package web
 
 import (
-	"log"
 	"net/http"
-
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 )
 
 type Server struct {
-	bot *tgbotapi.BotAPI
+	//bot            *tgbotapi.BotAPI
+	reviewHandlers *ReviewHandlers
+	mux            *http.ServeMux
 }
 
-func NewServer(bot *tgbotapi.BotAPI) *Server {
+func NewServer(mux *http.ServeMux, reviewHandlers *ReviewHandlers) *Server {
 	return &Server{
-		bot: bot,
+		//bot:            bot,
+		reviewHandlers: reviewHandlers,
+		mux:            mux,
 	}
 }
 
-func (s *Server) RegisterRoutes(mux *http.ServeMux) {
+func (s *Server) RegisterRoutes() {
+	s.mux.HandleFunc("/", s.reviewHandlers.Index)
+	s.mux.HandleFunc("/register", s.reviewHandlers.Register)
+	s.mux.HandleFunc("/reviwers", s.reviewHandlers.ListReviwers)
 	/*
 		mux.HandleFunc("/telegram/webhook", telegramHandler)
 		_, err = bot.SetWebhook(tgbotapi.NewWebhook("https://reviewboss.goshort.tk:443/telegram/webhook"))
@@ -27,6 +31,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	*/
 }
 
+func (s *Server) Listen(addr string) error {
+	return http.ListenAndServe(addr, s.mux)
+}
+
+/*
 func (s *Server) RunTelegram() {
 	go s.waitForUpdates()
 }
@@ -65,3 +74,4 @@ func (s *Server) waitForUpdates() {
 		lastMsg = newMsg
 	}
 }
+*/
