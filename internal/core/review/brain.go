@@ -1,65 +1,78 @@
 package review
 
 import (
+	"context"
 	"sort"
-	"strings"
-
-	"github.com/vasyahuyasa/reviewboss/internal/infrasturcure/notify"
+	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 )
 
 var ErrAlreadyRegistred = errors.New("merge request already registered")
+var ErrNotFound = errors.New("merge request not found")
 
-// MergeRequest is piece of code for review
-type MergeRequest struct {
-	ID            string
-	URL           string
-	RequiredSkill SkillName
+const (
+	waitTimeout       = time.Minute
+	waitAcceptTimeout = time.Minute
+)
+
+// TimoutHandler when timeout for merge request exceed
+type TimoutHandler func(mr *MergeRequest)
+
+// Brain is decede who should make review. Not thread-safe
+type Brain struct {
+
+	// TODO: dispose of global lock
+	sync.Mutex
+
+	reviwers ReviwerLister
+	assigns  map[string]mergeAssign
+
+	onTimeout         TimoutHandler
+	onProposalTimeout TimoutHandler
 }
 
 type mergeAssign struct {
-	merge    MergeRequest
-	reviwers []Reviewer
-	assignee *Reviewer
+	mergeRequest *MergeRequest
+	reviwers     *[]Reviewer
+	assignee     Reviewer
+
+	acceptCtx             context.Context
+	acceptTimeoutCancel   context.CancelFunc
+	proposalCtx           context.Context
+	proposalTimeoutCancel context.CancelFunc
 }
 
-// Brain is decede who should make review
-type Brain struct {
-	reviwers ReviwerLister
-	assigns  map[string]mergeAssign
-}
-
-func NewBrain(reviwers ReviwerLister) *Brain {
+func NewBrain(reviwers ReviwerLister, onTimeout, onProposalTimeout TimoutHandler) *Brain {
 	return &Brain{
 		reviwers: reviwers,
 		assigns:  map[string]mergeAssign{},
+
+		onTimeout:         onTimeout,
+		onProposalTimeout: onProposalTimeout,
 	}
 }
 
-func (b *Brain) Register(mr MergeRequest) error {
+func (b *Brain) RegisterMergeRequest(mr *MergeRequest) error {
 	_, ok := b.assigns[mr.ID]
 	if ok {
 		return ErrAlreadyRegistred
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), waitAcceptTimeout)
+
 	b.assigns[mr.ID] = mergeAssign{
-		merge: mr,
+		mergeRequest:        mr,
+		acceptCtx:           ctx,
+		acceptTimeoutCancel: cancel,
 	}
-
-	reviwers, err := b.SelectReviwers(mr.RequiredSkill)
-	if err != nil {
-		return err
-	}
-
-	list := []string{}
-	for _, r := range reviwers {
-		list = append(list, r.Name)
-	}
-
-	notify.ShowMessage("Список ревьюверов: " + strings.Join(list, ", "))
 
 	return nil
+}
+
+func (b *Brain) RemoveMergeRequest(id string) {
+	delete(b.assigns, id)
 }
 
 func (b *Brain) SelectReviwers(requiredSkill SkillName) ([]Reviewer, error) {
@@ -82,4 +95,12 @@ func (b *Brain) SelectReviwers(requiredSkill SkillName) ([]Reviewer, error) {
 	})
 
 	return suitable, nil
+}
+
+func (b *Brain) AssignReviwers(id string, reviwers []Reviewer) error {
+	_, ok := b.assigns[mr.ID]
+	if !ok {
+		return ErrNotFound
+	}
+
 }

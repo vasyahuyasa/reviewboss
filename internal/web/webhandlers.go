@@ -40,27 +40,34 @@ func (h *ReviewHandlers) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.Brain.Lock()
+	defer h.Brain.Unlock()
+
 	skill := review.SkillGolang
 
-	mr := review.MergeRequest{
-		ID:            id,
-		URL:           url,
-		RequiredSkill: skill,
-	}
+	mr := review.NewMergeRequest(id, url, skill)
 
-	err := h.Brain.Register(mr)
+	err := h.Brain.RegisterMergeRequest(mr)
 	if err != nil {
 		log.Printf("can not register merge request: %v", err)
 		http.Error(w, fmt.Sprintf("can not register merge request: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	reviwers, err := h.Brain.SelectReviwers(skill)
+	if err != nil {
+		log.Printf("can not get list of reviwers: %v", err)
+		http.Error(w, fmt.Sprintf("can not can not get list of reviwers: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	log.Println("merger request", id, "registered")
 
 	enc := json.NewEncoder(w)
 	err = enc.Encode(mr)
 	if err != nil {
-		log.Printf("can not marshal mergereuest: %v", err)
-		http.Error(w, fmt.Sprintf("can not marshal mergereuest: %v", err), http.StatusInternalServerError)
+		log.Printf("can not marshal mergerequest: %v", err)
+		http.Error(w, fmt.Sprintf("can not marshal mergerqeuest: %v", err), http.StatusInternalServerError)
 		return
 	}
 }
@@ -82,4 +89,12 @@ func (h *ReviewHandlers) ListReviwers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("can not encode list of reviwers: %v", err)
 	}
+}
+
+func (h *ReviewHandlers) Accept(w http.ResponseWriter, r *http.Request) {
+
+}
+
+func (h *ReviewHandlers) Decline(w http.ResponseWriter, r *http.Request) {
+
 }
