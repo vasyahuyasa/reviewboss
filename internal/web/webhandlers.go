@@ -10,7 +10,7 @@ import (
 )
 
 type ReviewHandlers struct {
-	Brain *review.Brain
+	reviewService *review.Service
 }
 
 func (h *ReviewHandlers) Index(w http.ResponseWriter, r *http.Request) {
@@ -40,24 +40,12 @@ func (h *ReviewHandlers) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.Brain.Lock()
-	defer h.Brain.Unlock()
-
-	skill := review.SkillGolang
-
-	mr := review.NewMergeRequest(id, url, skill)
-
-	err := h.Brain.RegisterMergeRequest(mr)
-	if err != nil {
-		log.Printf("can not register merge request: %v", err)
-		http.Error(w, fmt.Sprintf("can not register merge request: %v", err), http.StatusInternalServerError)
+	mr, err := h.reviewService.RegisterMergeRequest(id, url, review.SkillGolang)
+	if err == review.ErrNotFound {
+		http.Error(w, err.Error(), http.StatusNotFound)
 		return
-	}
-
-	reviwers, err := h.Brain.SelectReviwers(skill)
-	if err != nil {
-		log.Printf("can not get list of reviwers: %v", err)
-		http.Error(w, fmt.Sprintf("can not can not get list of reviwers: %v", err), http.StatusInternalServerError)
+	} else if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 

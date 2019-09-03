@@ -27,7 +27,7 @@ type Brain struct {
 	sync.Mutex
 
 	reviwers ReviwerLister
-	assigns  map[string]mergeAssign
+	assigns  map[string]*mergeAssign
 
 	onTimeout         TimoutHandler
 	onProposalTimeout TimoutHandler
@@ -35,7 +35,7 @@ type Brain struct {
 
 type mergeAssign struct {
 	mergeRequest *MergeRequest
-	reviwers     *[]Reviewer
+	reviwers     []Reviewer
 	assignee     Reviewer
 
 	acceptCtx             context.Context
@@ -47,7 +47,7 @@ type mergeAssign struct {
 func NewBrain(reviwers ReviwerLister, onTimeout, onProposalTimeout TimoutHandler) *Brain {
 	return &Brain{
 		reviwers: reviwers,
-		assigns:  map[string]mergeAssign{},
+		assigns:  map[string]*mergeAssign{},
 
 		onTimeout:         onTimeout,
 		onProposalTimeout: onProposalTimeout,
@@ -75,7 +75,7 @@ func (b *Brain) RemoveMergeRequest(id string) {
 	delete(b.assigns, id)
 }
 
-func (b *Brain) SelectReviwers(requiredSkill SkillName) ([]Reviewer, error) {
+func (b *Brain) SelectReviwersBySkill(requiredSkill SkillName) ([]Reviewer, error) {
 	all, err := b.reviwers.List()
 	if err != nil {
 		return nil, errors.Wrap(err, "can not get list of reviwers")
@@ -98,9 +98,12 @@ func (b *Brain) SelectReviwers(requiredSkill SkillName) ([]Reviewer, error) {
 }
 
 func (b *Brain) AssignReviwers(id string, reviwers []Reviewer) error {
-	_, ok := b.assigns[mr.ID]
+	mergeRequest, ok := b.assigns[id]
 	if !ok {
 		return ErrNotFound
 	}
 
+	mergeRequest.reviwers = reviwers
+
+	return nil
 }
