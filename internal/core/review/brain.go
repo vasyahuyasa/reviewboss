@@ -1,7 +1,7 @@
 package review
 
 import (
-	"context"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -37,11 +37,10 @@ type mergeAssign struct {
 	mergeRequest *MergeRequest
 	reviwers     []Reviewer
 	assignee     Reviewer
+	hasAssignee  bool
 
-	acceptCtx             context.Context
-	acceptTimeoutCancel   context.CancelFunc
-	proposalCtx           context.Context
-	proposalTimeoutCancel context.CancelFunc
+	acceptTimeoutCancel   chan struct{}
+	proposalTimeoutCancel chan struct{}
 }
 
 func NewBrain(reviwers ReviwerLister, onTimeout, onProposalTimeout TimoutHandler) *Brain {
@@ -55,16 +54,33 @@ func NewBrain(reviwers ReviwerLister, onTimeout, onProposalTimeout TimoutHandler
 }
 
 func (b *Brain) RegisterMergeRequest(mr *MergeRequest) error {
-	_, ok := b.assigns[mr.ID]
+	_, ok := b.findMergeAssign(mr.ID)
 	if ok {
 		return ErrAlreadyRegistred
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), waitAcceptTimeout)
+	cancel := make(chan struct{})
+	go func() {
+		select {
+		case <-time.After(waitAcceptTimeout):
+			err := mr.setState(StateWaitAcceptTimeout)
+			if err != nil {
+				log.Println("get waitAceptTimeout timer but can not set new state: ", err)
+				return
+			}
+			b.onTimeout(mr)
 
-	b.assigns[mr.ID] = mergeAssign{
+		case <-cancel:
+		}
+	}()
+
+	err := mr.setState(StateWaitAccept)
+	if err != nil {
+		log.Println("can not set state of merge request to StateWaitAccept: ", err)
+	}
+
+	b.assigns[mr.ID] = &mergeAssign{
 		mergeRequest:        mr,
-		acceptCtx:           ctx,
 		acceptTimeoutCancel: cancel,
 	}
 
@@ -106,4 +122,27 @@ func (b *Brain) AssignReviwers(id string, reviwers []Reviewer) error {
 	mergeRequest.reviwers = reviwers
 
 	return nil
+}
+
+func (b *Brain) findMergeAssign(id string) (*mergeAssign, bool) {
+	m, ok := b.assigns[id]
+	return m, ok
+}
+
+func (ma *mergeAssign) firstReviwer() (Reviewer, bool) {
+	if len(ma.reviwers) == 0 {
+		return Reviewer{}, false
+	}
+
+	return ma.reviwers[0], true
+}
+
+func (ma *mergeAssign) setAssignee(reviwer Reviewer) {
+	ma.assignee = reviwer
+	ma.hasAssignee = true
+}
+
+func (ma *mergeAssign) removeAssignee() {
+	ma.assignee = Reviewer{}
+	ma.hasAssignee = false
 }

@@ -41,15 +41,18 @@ func (h *ReviewHandlers) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mr, err := h.reviewService.RegisterMergeRequest(id, url, review.SkillGolang)
-	if err == review.ErrNotFound {
+	switch {
+	case err == review.ErrNotFound:
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
-	} else if err != nil {
+
+	case err != nil:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
 
-	log.Println("merger request", id, "registered")
+	default:
+		log.Println("merger request", id, "registered")
+	}
 
 	enc := json.NewEncoder(w)
 	err = enc.Encode(mr)
@@ -65,7 +68,7 @@ func (h *ReviewHandlers) ListReviwers(w http.ResponseWriter, r *http.Request) {
 
 	enc := json.NewEncoder(w)
 
-	reviwers, err := h.Brain.SelectReviwers(skill)
+	reviwers, err := h.reviewService.ReviwersBySkill(skill)
 
 	if err != nil {
 		log.Printf("can not get list of reviwers: %v", err)

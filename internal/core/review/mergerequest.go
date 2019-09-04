@@ -43,10 +43,15 @@ func NewMergeRequest(ID string, URL string, RequiredSkill SkillName) *MergeReque
 	}
 }
 
+// Satate is return current state of merge request. Function is not thread safe
+func (m *MergeRequest) Satate() state {
+	return m.currentState
+}
+
 // SetState is change current state of mergerequest, if it is impossible change state or
 // state not allowed error will be returned, if change state success after callback
 // will be executed within lock.
-func (m *MergeRequest) SetState(newState state, after func()) error {
+func (m *MergeRequest) setState(newState state) error {
 	states, ok := stateMap[newState]
 	if !ok {
 		return fmt.Errorf("unknow state %v", newState)
@@ -54,17 +59,10 @@ func (m *MergeRequest) SetState(newState state, after func()) error {
 
 	for _, possibleState := range states {
 		if possibleState == newState {
-			if after != nil {
-				after()
-			}
+			m.currentState = newState
 			return nil
 		}
 	}
 
 	return fmt.Errorf("state %v not allowed after state %v", newState, m.currentState)
-}
-
-// Satate is return current state of merge request. Function is not thread safe
-func (m *MergeRequest) Satate() state {
-	return m.currentState
 }
