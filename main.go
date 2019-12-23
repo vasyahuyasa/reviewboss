@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -29,7 +30,7 @@ type mergeRequest struct {
 	Status    mergeRequestStatus
 	AddedOn   time.Time
 	UpdatedOn time.Time
-	Asssignee *reviwer
+	Assignee  *reviwer
 }
 
 type engine struct {
@@ -44,6 +45,20 @@ func (eng *engine) AddMergeRequest(m mergeRequest) error {
 	return nil
 }
 
+func (eng *engine) SetAseegnee(mergeID string, aseegnee *reviwer) error {
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+
+	m, ok := eng.mergeRequests[mergeID]
+	if !ok {
+		return errors.New("merge request not found")
+	}
+
+	m.Assignee = aseegnee
+	eng.mergeRequests[mergeID] = m
+	return nil
+}
+
 func (eng *engine) Watcher() {
 	for eng.running {
 		eng.mu.Lock()
@@ -53,15 +68,17 @@ func (eng *engine) Watcher() {
 			switch m.Status {
 			case statusNew:
 				if timeout >= timeoutNew {
-
+					// TODO: message with list of aseegnees
+					m.Status = statusWaitAssignee
 				}
 			case statusWaitAssignee:
 				if timeout >= timeoutWaitAseegnee {
-
+					// TODO: force aseegnee someone
+					m.Status = statusAssigned
 				}
 			case statusAssigned:
 				if timeout >= timeoutAssigneed {
-
+					// TODO: check merge request status and maybe set done
 				}
 			case statusDone:
 			}
