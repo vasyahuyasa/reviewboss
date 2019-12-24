@@ -3,13 +3,12 @@ package main
 import (
 	"errors"
 	"log"
-	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
-	"golang.org/x/net/proxy"
 )
 
 const (
@@ -29,7 +28,7 @@ const (
 type config struct {
 	Token   string `toml:"token"`
 	Proxy   string `toml:"proxy"`
-	GroupID int    `toml:"groupid"`
+	GroupID int64  `toml:"groupid"`
 }
 
 type reviwer struct {
@@ -188,55 +187,27 @@ func main() {
 		log.Fatalf("can not read config %q: %v", configFile, err)
 	}
 
-	var httpClient *http.Client
-
-	if cfg.Proxy != "" {
-		dialer, err := proxy.SOCKS5("tcp", cfg.Proxy, nil, proxy.Direct)
-		if err != nil {
-			log.Fatalf("can't connect to the proxy: %v", err)
-		}
-
-		httpClient = &http.Client{Transport: &http.Transport{Dial: dialer.Dial}}
-	} else {
-		httpClient = &http.Client{}
-	}
-
-	bot, err := tgbotapi.NewBotAPIWithClient(cfg.Token, httpClient)
-	if err != nil {
-		log.Fatalf("can not inittialize telegram bot: %v", err)
-	}
-
-	log.Printf("telegram bot authorized on account %s", bot.Self.UserName)
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-
-	updates, err := bot.GetUpdatesChan(u)
-	if err != nil {
-		log.Fatalf("telegram can not get update channel: %v", err)
-	}
-
-	for update := range updates {
-		log.Println(update)
-
-		if update.Message == nil || update.Message.From == nil || update.Message.Chat == nil { // ignore any non-Message Updates
-			continue
-		}
-
-		log.Printf("telegam message from %s %v group %s %v", update.Message.From.String(), update.Message.From, update.Message.Chat.Title, update.Message.Chat)
-
-		/*
-			if update.Message == nil { // ignore any non-Message Updates
-				continue
+	bot := botAPI{
+		token:     cfg.Token,
+		proxyAddr: cfg.Proxy,
+		onUpdate: func(update tgbotapi.Update) {
+			if update.Message == nil || update.Message.Chat == nil {
+				return
 			}
 
-			log.Printf("[%s] %s",
-			.UserName, update.Message.Text)
+			// process only links
+			u, err := url.Parse(update.Message.Text)
+			if err != nil {
+				return
+			}
 
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, update.Message.Text)
-			msg.ReplyToMessageID = update.Message.MessageID
+			log.Println("url:", u)
+		},
+	}
 
-			bot.Send(msg)
-		*/
+	err = bot.waitForUpdates()
+	if err != nil {
+		log.Fatalf("telegram bot is off: %v", err)
 	}
 
 	eng := engine{
@@ -244,8 +215,14 @@ func main() {
 		done:          make(chan interface{}),
 		mergeRequests: map[string]mergeRequest{},
 
-		onStatusWaitAssignee:  func(m mergeRequest) {},
-		onStatusAssigned:      func(m mergeRequest) {},
+		onStatusWaitAssignee: func(m mergeRequest) {},
+		onStatusAssigned: func(m mergeRequest) {
+			//msg := tgbotapi.NewMessage(cfg.GroupID, fmt.Sprintf("%q is assigned to %s", m.ID, "@ioaioa"))
+			// _, err := bot.Send(msg)
+			// if err != nil {
+			// 	log.Printf("can not send to telegram: %v", err)
+			// }
+		},
 		onNoProposedAssignees: func(m mergeRequest) {},
 		onDone:                func(m mergeRequest) {},
 		beforeClean:           func(m mergeRequest) {},
@@ -267,7 +244,7 @@ func main() {
 		UpdatedOn: time.Now(),
 	})
 
-	time.Sleep(time.Second * 10)
+	time.Sleep(time.Second * 100)
 	log.Println(eng.mergeRequests)
 	err = eng.Shutdown()
 	if err != nil {
