@@ -1,4 +1,3 @@
 token = "123:your_bot_token"
 proxy = "127.0.0.1:9050"
-groupid = 0
 re_match = "(?Um)https://gitlab\\.mysoft\\.ur:12356/(.+)/merge_requests/(\\d+)\\b"
