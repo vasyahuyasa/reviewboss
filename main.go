@@ -2,8 +2,10 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 
@@ -26,10 +28,13 @@ const (
 	configFile = "config.toml"
 )
 
+var reMergeRequest = regexp.MustCompile(`(?Um)https://gitlab\.devpizzasoft\.ru:8000/(.+)/merge_requests/(\d+)\b`)
+
 type config struct {
-	Token   string `toml:"token"`
-	Proxy   string `toml:"proxy"`
-	GroupID int    `toml:"groupid"`
+	Token         string `toml:"token"`
+	Proxy         string `toml:"proxy"`
+	GroupID       int    `toml:"groupid"`
+	MergeRequstRe string `toml:"re_match"`
 }
 
 type reviwer struct {
@@ -45,6 +50,15 @@ type mergeRequest struct {
 	UpdatedOn        time.Time
 	Assignee         *reviwer
 	ProposeAssignees []reviwer
+	ChatID           int64
+	From             string
+	Link             string
+}
+
+type mergeRequestInput struct {
+	full    string
+	project string
+	id      string
 }
 
 type engine struct {
@@ -67,6 +81,10 @@ type engine struct {
 
 	// before clean done
 	beforeClean func(m mergeRequest)
+}
+
+func (input *mergeRequestInput) ID() string {
+	return input.project + "_" + input.id
 }
 
 func (m *mergeRequest) SetStatus(status mergeRequestStatus) {
@@ -181,6 +199,20 @@ func (eng *engine) Shutdown() error {
 	return nil
 }
 
+func extractMergeLinks(s string) []mergeRequestInput {
+	// https://gitlab.devpizzasoft.ru:8000/pizzasoft/socket/merge_requests/75
+	var input []mergeRequestInput
+	for _, match := range reMergeRequest.FindAllStringSubmatch(s, -1) {
+		input = append(input, mergeRequestInput{
+			full:    match[0],
+			project: match[1],
+			id:      match[2],
+		})
+	}
+
+	return input
+}
+
 func main() {
 	var cfg config
 	_, err := toml.DecodeFile(configFile, &cfg)
@@ -207,44 +239,29 @@ func main() {
 	}
 
 	log.Printf("telegram bot authorized on account %s", bot.Self.UserName)
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-
-	updates, err := bot.GetUpdatesChan(u)
-	if err != nil {
-		log.Fatalf("telegram can not get update channel: %v", err)
-	}
-
-	for update := range updates {
-		log.Println(update)
-
-		if update.Message == nil || update.Message.From == nil || update.Message.Chat == nil { // ignore any non-Message Updates
-			continue
-		}
-
-		log.Printf("telegam message from %s %v group %s %v", update.Message.From.String(), update.Message.From, update.Message.Chat.Title, update.Message.Chat)
-
-		/*
-			if update.Message == nil { // ignore any non-Message Updates
-				continue
-			}
-
-			log.Printf("[%s] %s",
-			.UserName, update.Message.Text)
-
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, update.Message.Text)
-			msg.ReplyToMessageID = update.Message.MessageID
-
-			bot.Send(msg)
-		*/
-	}
 
 	eng := engine{
 		running:       true,
 		done:          make(chan interface{}),
 		mergeRequests: map[string]mergeRequest{},
 
-		onStatusWaitAssignee:  func(m mergeRequest) {},
+		onStatusWaitAssignee: func(m mergeRequest) {
+			text := fmt.Sprintf("%s ожидает ревью", m.Link)
+			for i, r := range m.ProposeAssignees {
+				text += fmt.Sprintf("\n%d. %s", i+1, r.ID)
+			}
+
+			msg := tgbotapi.NewMessage(m.ChatID, text)
+			kbd := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{
+				tgbotapi.NewInlineKeyboardButtonData("Ревью", "take_review_"+m.ID),
+				tgbotapi.NewInlineKeyboardButtonData("Не хочу", "decline_review_"+m.ID),
+			})
+			msg.ReplyMarkup = kbd
+			_, err := bot.Send(msg)
+			if err != nil {
+				log.Printf("can not send message to channel %d: %v", m.ChatID, err)
+			}
+		},
 		onStatusAssigned:      func(m mergeRequest) {},
 		onNoProposedAssignees: func(m mergeRequest) {},
 		onDone:                func(m mergeRequest) {},
@@ -253,21 +270,43 @@ func main() {
 
 	go eng.Watcher()
 
-	eng.AddMergeRequest(mergeRequest{
-		ID:        "mr1",
-		Status:    statusNew,
-		AddedOn:   time.Now(),
-		UpdatedOn: time.Now(),
-	})
+	go func() {
+		u := tgbotapi.NewUpdate(0)
+		u.Timeout = 60
 
-	eng.AddMergeRequest(mergeRequest{
-		ID:        "mr2",
-		Status:    statusNew,
-		AddedOn:   time.Now(),
-		UpdatedOn: time.Now(),
-	})
+		updates, err := bot.GetUpdatesChan(u)
+		if err != nil {
+			log.Fatalf("telegram can not get update channel: %v", err)
+		}
+		updates.Clear()
 
-	time.Sleep(time.Second * 10)
+		for update := range updates {
+			if update.Message == nil || update.Message.From == nil || update.Message.Chat == nil {
+				if update.CallbackQuery != nil {
+					log.Println("callback", update.CallbackQuery)
+				}
+				continue
+			}
+
+			log.Printf("telegam message from %s %v group %s %v", update.Message.From.String(), update.Message.From, update.Message.Chat.Title, update.Message.Chat)
+
+			for _, input := range extractMergeLinks(update.Message.Text) {
+				log.Println("MergeRequest:", input.project, input.id)
+				err := eng.AddMergeRequest(mergeRequest{
+					ID:        input.ID(),
+					Status:    statusNew,
+					AddedOn:   time.Now(),
+					UpdatedOn: time.Now(),
+					ChatID:    update.Message.Chat.ID,
+					From:      update.Message.From.String(),
+				})
+
+				log.Printf("can not register mergerequest %q: %v", input.ID(), err)
+			}
+		}
+	}()
+
+	time.Sleep(time.Minute)
 	log.Println(eng.mergeRequests)
 	err = eng.Shutdown()
 	if err != nil {
