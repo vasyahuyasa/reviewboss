@@ -4,14 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
+	"net/url"
 	"regexp"
 	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
-	"golang.org/x/net/proxy"
 )
 
 const (
@@ -220,20 +219,25 @@ func main() {
 		log.Fatalf("can not read config %q: %v", configFile, err)
 	}
 
-	var httpClient *http.Client
+	bot := botAPI{
+		token:     cfg.Token,
+		proxyAddr: cfg.Proxy,
+		onUpdate: func(update tgbotapi.Update) {
+			if update.Message == nil || update.Message.Chat == nil {
+				return
+			}
 
-	if cfg.Proxy != "" {
-		dialer, err := proxy.SOCKS5("tcp", cfg.Proxy, nil, proxy.Direct)
-		if err != nil {
-			log.Fatalf("can't connect to the proxy: %v", err)
-		}
+			// process only links
+			u, err := url.Parse(update.Message.Text)
+			if err != nil {
+				return
+			}
 
-		httpClient = &http.Client{Transport: &http.Transport{Dial: dialer.Dial}}
-	} else {
-		httpClient = &http.Client{}
+			log.Println("url:", u)
+		},
 	}
 
-	bot, err := tgbotapi.NewBotAPIWithClient(cfg.Token, httpClient)
+	err = bot.waitForUpdates()
 	if err != nil {
 		log.Fatalf("can not inittialize telegram bot: %v", err)
 	}
