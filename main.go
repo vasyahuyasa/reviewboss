@@ -6,11 +6,13 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+	gitlabapi "github.com/xanzy/go-gitlab"
 	"golang.org/x/net/proxy"
 )
 
@@ -28,16 +30,28 @@ const (
 	configFile = "config.toml"
 )
 
-var reMergeRequest = regexp.MustCompile(`(?Um)https://gitlab\.devpizzasoft\.ru:8000/(.+)/merge_requests/(\d+)\b`)
+var (
+
+	// map[telegramID][gitlabLogin]
+	telegram2gitlab = map[int]string{
+		// TODO: machanic of register account
+		// TODO: cahe of names for gitlab projects
+		421340245: "ioaioa",
+	}
+)
 
 type config struct {
-	Token         string `toml:"token"`
-	Proxy         string `toml:"proxy"`
-	MergeRequstRe string `toml:"re_match"`
+	BotToken    string `toml:"bot_token"`
+	Proxy       string `toml:"proxy"`
+	ReMatch     string `toml:"re_match"`
+	GitlabToken string `toml:"gitlab_token"`
 }
 
 type reviwer struct {
-	ID string
+	ID            string
+	GitlabProject string
+	GitlabID      int
+	TelegramID    int
 }
 
 type mergeRequestStatus int
@@ -51,13 +65,17 @@ type mergeRequest struct {
 	ProposeAssignees []reviwer
 	ChatID           int64
 	From             string
-	Link             string
+	FromID           int
+
+	Link                  string
+	GitlabProject         string
+	GitlabMergeRequesetID int
 }
 
 type mergeRequestInput struct {
-	link    string
-	project string
-	id      string
+	link                 string
+	gitlabProject        string
+	gitlabMergeRequestId int
 }
 
 type engine struct {
@@ -82,8 +100,12 @@ type engine struct {
 	beforeClean func(m mergeRequest)
 }
 
+type gitlab struct {
+	api *gitlabapi.Client
+}
+
 func (input *mergeRequestInput) ID() string {
-	return input.project + "_" + input.id
+	return fmt.Sprintf("%s_%d", input.gitlabProject, input.gitlabMergeRequestId)
 }
 
 func (m *mergeRequest) SetStatus(status mergeRequestStatus) {
@@ -116,7 +138,7 @@ func (eng *engine) Watcher() {
 							ID: "reviwer1",
 						},
 						{
-							ID: "reviwer1",
+							ID: "reviwer2",
 						},
 					}
 
@@ -145,7 +167,8 @@ func (eng *engine) Watcher() {
 						m.SetStatus(statusAssigned)
 
 						// TODO: force aseegnee someone
-						m.Assignee = &reviwer{ID: m.ProposeAssignees[0].ID}
+						r := m.ProposeAssignees[0]
+						m.Assignee = &r
 
 						log.Printf("%q moved to status statusAssigned with reviwer %q", m.ID, m.Assignee.ID)
 
@@ -191,25 +214,42 @@ func (eng *engine) Shutdown() error {
 
 	select {
 	case <-time.After(time.Second * 10):
-		return errors.New("timeout")
+		return errors.New("shutdown timed out, force quit")
 	case <-eng.done:
 	}
 
 	return nil
 }
 
-func extractMergeLinks(s string) []mergeRequestInput {
-	// https://gitlab.devpizzasoft.ru:8000/pizzasoft/socket/merge_requests/75
+func (git *gitlab) Assign(project string, mergeRequest int, assigneeID int) error {
+	_, _, err := git.api.MergeRequests.UpdateMergeRequest(project, mergeRequest, &gitlabapi.UpdateMergeRequestOptions{
+		AssigneeIDs: []int{assigneeID},
+	})
+
+	return err
+}
+
+func extractMergeLinks(s string, re *regexp.Regexp) []mergeRequestInput {
 	var input []mergeRequestInput
-	for _, match := range reMergeRequest.FindAllStringSubmatch(s, -1) {
+	for _, match := range re.FindAllStringSubmatch(s, -1) {
+		id, err := strconv.Atoi(match[2])
+		if err != nil {
+			log.Printf("can not convert %q to int: %v", match[2], err)
+			continue
+		}
+
 		input = append(input, mergeRequestInput{
-			link:    match[0],
-			project: match[1],
-			id:      match[2],
+			link:                 match[0],
+			gitlabProject:        match[1],
+			gitlabMergeRequestId: id,
 		})
 	}
 
 	return input
+}
+
+func telegramToGitlab(telegramUserID int64, gitlabuserID, gitlabProject string) (int, error) {
+	return 0, nil
 }
 
 func main() {
@@ -219,6 +259,10 @@ func main() {
 		log.Fatalf("can not read config %q: %v", configFile, err)
 	}
 
+	// regular expression for extract gitlab links
+	reMergeRequest := regexp.MustCompile(cfg.ReMatch)
+
+	// telegram bot
 	var httpClient *http.Client
 
 	if cfg.Proxy != "" {
@@ -232,23 +276,29 @@ func main() {
 		httpClient = &http.Client{}
 	}
 
-	bot, err := tgbotapi.NewBotAPIWithClient(cfg.Token, httpClient)
+	bot, err := tgbotapi.NewBotAPIWithClient(cfg.BotToken, httpClient)
 	if err != nil {
 		log.Fatalf("can not inittialize telegram bot: %v", err)
 	}
 
 	log.Printf("telegram bot authorized on account %s", bot.Self.UserName)
 
+	// gitlab api
+	git := &gitlab{
+		api: gitlabapi.NewClient(&http.Client{}, cfg.GitlabToken),
+	}
+
+	// main logic
 	eng := engine{
 		running:       true,
 		done:          make(chan interface{}),
 		mergeRequests: map[string]mergeRequest{},
 
 		onStatusWaitAssignee: func(m mergeRequest) {
-			text := fmt.Sprintf("[%s](%s) ожидает ревью", m.Link, m.Link)
+			text := fmt.Sprintf("[%s](%s)", m.Link, m.Link)
 			for i, r := range m.ProposeAssignees {
 				if i == 0 {
-					text += "\n\nКандидаты на проведение ревью:\n\n"
+					text += "\n\n*Кандидаты на проведение ревью:*"
 				}
 				text += fmt.Sprintf("\n%d. %s", i+1, r.ID)
 			}
@@ -272,8 +322,7 @@ func main() {
 	go eng.Watcher()
 
 	go func() {
-		u := tgbotapi.NewUpdate(0)
-		u.Timeout = 60
+		u := tgbotapi.UpdateConfig{Timeout: 60}
 
 		updates, err := bot.GetUpdatesChan(u)
 		if err != nil {
@@ -283,13 +332,10 @@ func main() {
 		updates.Clear()
 
 		for update := range updates {
-
-			log.Printf("%v", update)
-
 			// text message on channel
 			if update.Message != nil {
-				for _, input := range extractMergeLinks(update.Message.Text) {
-					log.Println("MergeRequest:", input.project, input.id)
+				for _, input := range extractMergeLinks(update.Message.Text, reMergeRequest) {
+					log.Println("MergeRequest:", input.gitlabProject, input.gitlabMergeRequestId)
 					err := eng.AddMergeRequest(mergeRequest{
 						ID:        input.ID(),
 						Status:    statusNew,
@@ -297,7 +343,11 @@ func main() {
 						UpdatedOn: time.Now(),
 						ChatID:    update.Message.Chat.ID,
 						From:      update.Message.From.String(),
-						Link:      input.link,
+						FromID:    update.Message.From.ID,
+
+						Link:                  input.link,
+						GitlabProject:         input.gitlabProject,
+						GitlabMergeRequesetID: input.gitlabMergeRequestId,
 					})
 
 					if err != nil {
@@ -318,17 +368,40 @@ func main() {
 				}
 
 				if m.Assignee == nil {
-					m.Assignee = &reviwer{ID: update.CallbackQuery.From.String()}
+					// TODO: telegram ID to gitlab id
+					m.Assignee = &reviwer{
+						ID:         update.CallbackQuery.From.String(),
+						TelegramID: update.CallbackQuery.From.ID,
+					}
 					eng.mergeRequests[id] = m
+
+					err := git.Assign(m.GitlabProject, m.GitlabMergeRequesetID, m.Assignee.GitlabID)
+					if err != nil {
+						log.Println("can not assign %q to merge request %q: %v", m.Assignee, m.ID, err)
+					}
 				}
 
 				eng.mu.Unlock()
+
 				/*
-					tgbotapi.NewEditMessageReplyMarkup(
+					newKbd := tgbotapi.NewEditMessageReplyMarkup(
 						update.CallbackQuery.Message.Chat.ID,
-						update.CallbackQuery.Message.MessageID)
+						update.CallbackQuery.Message.MessageID,
+						tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{}),
+					)
 				*/
-				log.Println("callback", update.CallbackQuery)
+
+				newMsg := tgbotapi.NewEditMessageText(
+					update.CallbackQuery.Message.Chat.ID,
+					update.CallbackQuery.Message.MessageID,
+					fmt.Sprintf("[%s](%s)\n\n*Ревью проводит:* @%s", m.Link, m.Link, m.Assignee.ID),
+				)
+				newMsg.ParseMode = "markdown"
+
+				_, err := bot.Send(newMsg)
+				if err != nil {
+					log.Printf("can not edit keyboard: %v", err)
+				}
 			}
 		}
 	}()
