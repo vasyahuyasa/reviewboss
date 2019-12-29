@@ -46,6 +46,7 @@ type config struct {
 	Proxy       string `toml:"proxy"`
 	ReMatch     string `toml:"re_match"`
 	GitlabToken string `toml:"gitlab_token"`
+	GitlabURL   string `toml:"gitlab_url"`
 }
 
 type reviwer struct {
@@ -70,12 +71,14 @@ type mergeRequest struct {
 	Link                  string
 	GitlabProject         string
 	GitlabMergeRequesetID int
+	GitlabTitle           string
+	GItlabFileCount       int
 }
 
 type mergeRequestInput struct {
 	link                 string
 	gitlabProject        string
-	gitlabMergeRequestId int
+	gitlabMergeRequestID int
 }
 
 type engine struct {
@@ -105,7 +108,7 @@ type gitlab struct {
 }
 
 func (input *mergeRequestInput) ID() string {
-	return fmt.Sprintf("%s_%d", input.gitlabProject, input.gitlabMergeRequestId)
+	return fmt.Sprintf("%s_%d", input.gitlabProject, input.gitlabMergeRequestID)
 }
 
 func (m *mergeRequest) SetStatus(status mergeRequestStatus) {
@@ -126,41 +129,35 @@ func (eng *engine) Watcher() {
 
 			switch m.Status {
 			case statusNew:
-				if timeout >= timeoutNew {
+				m.SetStatus(statusWaitAssignee)
 
-					// logging status change
-					m.SetStatus(statusWaitAssignee)
-
-					// TODO: select list of assignees
-
-					m.ProposeAssignees = []reviwer{
-						{
-							TelegramName: "reviwer1",
-						},
-						{
-							TelegramName: "reviwer2",
-						},
-					}
-
-					eng.mergeRequests[id] = m
-					if len(m.ProposeAssignees) > 0 {
-						assignees := ""
-						for i, proposedAssignee := range m.ProposeAssignees {
-							if i != 0 {
-								assignees += ", " + proposedAssignee.TelegramName
-							} else {
-								assignees += proposedAssignee.TelegramName
-							}
-
-						}
-						log.Printf("%q moved to status statusWaitAssignee with proposed assignees %s", m.ID, assignees)
-					} else {
-						log.Printf("%q moved to status statusWaitAssignee without proposed assignees", m.ID)
-					}
-
-					// TODO: message with list of aseegnees
-					eng.onStatusWaitAssignee(m)
+				// TODO: select list of assignees
+				m.ProposeAssignees = []reviwer{
+					{TelegramName: "reviwer1"},
+					{TelegramName: "reviwer2"},
 				}
+
+				eng.mergeRequests[id] = m
+
+				// TODO: message with list of aseegnees
+				eng.onStatusWaitAssignee(m)
+
+				// print list of propose assignees
+				if len(m.ProposeAssignees) > 0 {
+					assignees := ""
+					for i, proposedAssignee := range m.ProposeAssignees {
+						if i != 0 {
+							assignees += ", " + proposedAssignee.TelegramName
+						} else {
+							assignees += proposedAssignee.TelegramName
+						}
+
+					}
+					log.Printf("%q moved to status statusWaitAssignee with proposed assignees %s", m.ID, assignees)
+				} else {
+					log.Printf("%q moved to status statusWaitAssignee without proposed assignees", m.ID)
+				}
+
 			case statusWaitAssignee:
 				if timeout >= timeoutWaitAseegnee {
 					if len(m.ProposeAssignees) > 0 {
@@ -223,7 +220,7 @@ func (eng *engine) Shutdown() error {
 
 func (git *gitlab) Assign(project string, mergeRequest int, assigneeID int) error {
 	_, _, err := git.api.MergeRequests.UpdateMergeRequest(project, mergeRequest, &gitlabapi.UpdateMergeRequestOptions{
-		AssigneeIDs: []int{assigneeID},
+		AssigneeID: &assigneeID,
 	})
 
 	return err
@@ -256,7 +253,7 @@ func extractMergeLinks(s string, re *regexp.Regexp) []mergeRequestInput {
 		input = append(input, mergeRequestInput{
 			link:                 match[0],
 			gitlabProject:        match[1],
-			gitlabMergeRequestId: id,
+			gitlabMergeRequestID: id,
 		})
 	}
 
@@ -309,8 +306,12 @@ func main() {
 	log.Printf("telegram bot authorized on account %s", bot.Self.UserName)
 
 	// gitlab api
+	api := gitlabapi.NewClient(&http.Client{}, cfg.GitlabToken)
+	if cfg.GitlabURL != "" {
+		api.SetBaseURL(cfg.GitlabURL)
+	}
 	git := &gitlab{
-		api: gitlabapi.NewClient(&http.Client{}, cfg.GitlabToken),
+		api: api,
 	}
 
 	// main logic
@@ -362,7 +363,7 @@ func main() {
 				log.Println("From", update.Message.From.String(), update.Message.From.ID)
 
 				for _, input := range extractMergeLinks(update.Message.Text, reMergeRequest) {
-					log.Println("MergeRequest:", input.gitlabProject, input.gitlabMergeRequestId)
+					log.Println("MergeRequest:", input.gitlabProject, input.gitlabMergeRequestID)
 					err := eng.AddMergeRequest(mergeRequest{
 						ID:        input.ID(),
 						Status:    statusNew,
@@ -374,7 +375,7 @@ func main() {
 
 						Link:                  input.link,
 						GitlabProject:         input.gitlabProject,
-						GitlabMergeRequesetID: input.gitlabMergeRequestId,
+						GitlabMergeRequesetID: input.gitlabMergeRequestID,
 					})
 
 					if err != nil {
@@ -407,11 +408,16 @@ func main() {
 						log.Printf("can not assign %q to merge request %q: %v", m.Assignee.TelegramName, m.ID, err)
 					}
 
-					projectUserID, err := telegramToGitlab(git, update.CallbackQuery.From.ID, m.GitlabProject)
+					userID, err := telegramToGitlab(git, update.CallbackQuery.From.ID, m.GitlabProject)
 					if err != nil {
 						log.Printf("can not get userID of %q for project %q: %v", update.CallbackQuery.From.String(), m.GitlabProject, err)
 					} else {
-						log.Println("gitlab user:", projectUserID)
+						err = git.Assign(m.GitlabProject, m.GitlabMergeRequesetID, userID)
+						if err != nil {
+							log.Printf("can not assign %s with id %d for project %q: %v", m.Assignee.TelegramName, userID, m.GitlabProject, err)
+						} else {
+							log.Println("assign gitlab user:", userID)
+						}
 					}
 				}
 
