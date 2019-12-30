@@ -64,10 +64,14 @@ type mergeRequest struct {
 	UpdatedOn        time.Time
 	Assignee         *reviwer
 	ProposeAssignees []reviwer
-	ChatID           int64
-	From             string
-	FromID           int
 
+	// telegram params
+	TelegramFromName  string
+	TelegramFromID    int
+	TelegramChatID    int64
+	TelegramMessageID int
+
+	// gitlab params
 	Link                  string
 	GitlabProject         string
 	GitlabMergeRequesetID int
@@ -241,6 +245,21 @@ func (git *gitlab) ProjectUserID(project, username string) (int, error) {
 	return users[0].ID, nil
 }
 
+// MergeRequestInfo return title and changed file count for merge request
+func (git *gitlab) MergeRequestInfo(project string, mergeRequest int) (string, int, error) {
+	mr, _, err := git.api.MergeRequests.GetMergeRequestChanges(project, mergeRequest)
+	if err != nil {
+		return "", 0, err
+	}
+
+	cnt, err := strconv.Atoi(mr.ChangesCount)
+	if err != nil {
+		return "", 0, fmt.Errorf("can not parse number of changes for merge request: %w", err)
+	}
+
+	return mr.Title, cnt, nil
+}
+
 func extractMergeLinks(s string, re *regexp.Regexp) []mergeRequestInput {
 	var input []mergeRequestInput
 	for _, match := range re.FindAllStringSubmatch(s, -1) {
@@ -329,14 +348,14 @@ func main() {
 				text += fmt.Sprintf("\n%d. %s", i+1, r.TelegramName)
 			}
 
-			msg := tgbotapi.NewMessage(m.ChatID, text)
+			msg := tgbotapi.NewMessage(m.TelegramChatID, text)
 			msg.ParseMode = "markdown"
 			msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{
 				tgbotapi.NewInlineKeyboardButtonData("Я возьму", m.ID),
 			})
 			_, err := bot.Send(msg)
 			if err != nil {
-				log.Printf("can not send message to channel %d: %v", m.ChatID, err)
+				log.Printf("can not send message to channel %d: %v", m.TelegramChatID, err)
 			}
 		},
 		onStatusAssigned:      func(m mergeRequest) {},
@@ -369,13 +388,17 @@ func main() {
 						Status:    statusNew,
 						AddedOn:   time.Now(),
 						UpdatedOn: time.Now(),
-						ChatID:    update.Message.Chat.ID,
-						From:      update.Message.From.String(),
-						FromID:    update.Message.From.ID,
+
+						TelegramChatID:    update.Message.Chat.ID,
+						TelegramFromName:  update.Message.From.String(),
+						TelegramFromID:    update.Message.From.ID,
+						TelegramMessageID: update.Message.MessageID,
 
 						Link:                  input.link,
 						GitlabProject:         input.gitlabProject,
 						GitlabMergeRequesetID: input.gitlabMergeRequestID,
+						GitlabTitle:           "", // TODO: pull info
+						GItlabFileCount:       0,  // TODO: pull info
 					})
 
 					if err != nil {
