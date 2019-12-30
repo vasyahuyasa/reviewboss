@@ -76,7 +76,7 @@ type mergeRequest struct {
 	GitlabProject         string
 	GitlabMergeRequesetID int
 	GitlabTitle           string
-	GItlabFileCount       int
+	GitlabFileCount       int
 }
 
 type mergeRequestInput struct {
@@ -340,7 +340,7 @@ func main() {
 		mergeRequests: map[string]mergeRequest{},
 
 		onStatusWaitAssignee: func(m mergeRequest) {
-			text := fmt.Sprintf("[%s](%s)", m.Link, m.Link)
+			text := fmt.Sprintf("%s\nФайлов: %d", m.GitlabTitle, m.GitlabFileCount)
 			for i, r := range m.ProposeAssignees {
 				if i == 0 {
 					text += "\n\n*Кандидаты на проведение ревью:*"
@@ -353,6 +353,7 @@ func main() {
 			msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{
 				tgbotapi.NewInlineKeyboardButtonData("Я возьму", m.ID),
 			})
+			msg.ReplyToMessageID = m.TelegramMessageID
 			_, err := bot.Send(msg)
 			if err != nil {
 				log.Printf("can not send message to channel %d: %v", m.TelegramChatID, err)
@@ -382,8 +383,12 @@ func main() {
 				log.Println("From", update.Message.From.String(), update.Message.From.ID)
 
 				for _, input := range extractMergeLinks(update.Message.Text, reMergeRequest) {
-					log.Println("MergeRequest:", input.gitlabProject, input.gitlabMergeRequestID)
-					err := eng.AddMergeRequest(mergeRequest{
+					title, count, err := git.MergeRequestInfo(input.gitlabProject, input.gitlabMergeRequestID)
+					if err != nil {
+						log.Printf("can not retrive merge request info: %v", err)
+					}
+
+					err = eng.AddMergeRequest(mergeRequest{
 						ID:        input.ID(),
 						Status:    statusNew,
 						AddedOn:   time.Now(),
@@ -397,8 +402,8 @@ func main() {
 						Link:                  input.link,
 						GitlabProject:         input.gitlabProject,
 						GitlabMergeRequesetID: input.gitlabMergeRequestID,
-						GitlabTitle:           "", // TODO: pull info
-						GItlabFileCount:       0,  // TODO: pull info
+						GitlabTitle:           title,
+						GitlabFileCount:       count,
 					})
 
 					if err != nil {
@@ -419,40 +424,26 @@ func main() {
 				}
 
 				if m.Assignee == nil {
-					// TODO: telegram ID to gitlab id
-					m.Assignee = &reviwer{
-						TelegramName: update.CallbackQuery.From.String(),
-						TelegramID:   update.CallbackQuery.From.ID,
-					}
-					eng.mergeRequests[id] = m
-
-					err := git.Assign(m.GitlabProject, m.GitlabMergeRequesetID, m.Assignee.GitlabID)
-					if err != nil {
-						log.Printf("can not assign %q to merge request %q: %v", m.Assignee.TelegramName, m.ID, err)
-					}
-
 					userID, err := telegramToGitlab(git, update.CallbackQuery.From.ID, m.GitlabProject)
 					if err != nil {
 						log.Printf("can not get userID of %q for project %q: %v", update.CallbackQuery.From.String(), m.GitlabProject, err)
 					} else {
-						err = git.Assign(m.GitlabProject, m.GitlabMergeRequesetID, userID)
+						m.Assignee = &reviwer{
+							TelegramName: update.CallbackQuery.From.String(),
+							TelegramID:   update.CallbackQuery.From.ID,
+							GitlabID:     userID,
+						}
+						eng.mergeRequests[id] = m
+
+						err = git.Assign(m.GitlabProject, m.GitlabMergeRequesetID, m.Assignee.GitlabID)
 						if err != nil {
-							log.Printf("can not assign %s with id %d for project %q: %v", m.Assignee.TelegramName, userID, m.GitlabProject, err)
-						} else {
-							log.Println("assign gitlab user:", userID)
+							log.Printf("can not assign %q to merge request %q: %v", m.Assignee.TelegramName, m.ID, err)
 						}
 					}
+
 				}
 
 				eng.mu.Unlock()
-
-				/*
-					newKbd := tgbotapi.NewEditMessageReplyMarkup(
-						update.CallbackQuery.Message.Chat.ID,
-						update.CallbackQuery.Message.MessageID,
-						tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{}),
-					)
-				*/
 
 				newMsg := tgbotapi.NewEditMessageText(
 					update.CallbackQuery.Message.Chat.ID,
