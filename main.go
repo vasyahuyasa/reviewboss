@@ -58,7 +58,6 @@ type reviwer struct {
 type mergeRequestStatus int
 
 type mergeRequest struct {
-	ID               string
 	Status           mergeRequestStatus
 	AddedOn          time.Time
 	UpdatedOn        time.Time
@@ -120,9 +119,29 @@ func (m *mergeRequest) SetStatus(status mergeRequestStatus) {
 	m.UpdatedOn = time.Now()
 }
 
-func (eng *engine) AddMergeRequest(m mergeRequest) error {
-	eng.mergeRequests[m.ID] = m
+func (m *mergeRequest) ID() string {
+	return m.GitlabProject + "_" + strconv.Itoa(m.GitlabMergeRequesetID)
+}
+
+func (eng *engine) AddMergeRequest(id string, m mergeRequest) error {
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+
+	_, ok := eng.mergeRequests[id]
+	if ok {
+		return fmt.Errorf("merge request %q alredy registered", id)
+	}
+	eng.mergeRequests[id] = m
+
 	return nil
+}
+
+func (eng *engine) GetMergeRequest(id string) (mergeRequest, bool) {
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+
+	m, ok := eng.mergeRequests[id]
+	return m, ok
 }
 
 func (eng *engine) Watcher() {
@@ -351,7 +370,7 @@ func main() {
 			msg := tgbotapi.NewMessage(m.TelegramChatID, text)
 			msg.ParseMode = "markdown"
 			msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{
-				tgbotapi.NewInlineKeyboardButtonData("Я возьму", m.ID),
+				tgbotapi.NewInlineKeyboardButtonData("Я возьму", m.ID()),
 			})
 			msg.ReplyToMessageID = m.TelegramMessageID
 			_, err := bot.Send(msg)
@@ -388,8 +407,7 @@ func main() {
 						log.Printf("can not retrive merge request info: %v", err)
 					}
 
-					err = eng.AddMergeRequest(mergeRequest{
-						ID:        input.ID(),
+					err = eng.AddMergeRequest(input.ID(), mergeRequest{
 						Status:    statusNew,
 						AddedOn:   time.Now(),
 						UpdatedOn: time.Now(),
