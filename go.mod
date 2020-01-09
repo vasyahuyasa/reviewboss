@@ -4,6 +4,7 @@ go 1.13
 
 require (
 	github.com/BurntSushi/toml v0.3.1
+	github.com/go-chi/chi v4.0.2+incompatible
 	github.com/go-telegram-bot-api/telegram-bot-api v4.6.4+incompatible
 	github.com/mattn/go-sqlite3 v2.0.2+incompatible // indirect
 	github.com/technoweenie/multipartstreamer v1.0.1 // indirect

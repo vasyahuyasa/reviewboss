@@ -176,9 +176,9 @@ func (eng *engine) Watcher() {
 						}
 
 					}
-					log.Printf("%q moved to status statusWaitAssignee with proposed assignees %s", m.ID, assignees)
+					log.Printf("%q moved to status statusWaitAssignee with proposed assignees %s", m.ID(), assignees)
 				} else {
-					log.Printf("%q moved to status statusWaitAssignee without proposed assignees", m.ID)
+					log.Printf("%q moved to status statusWaitAssignee without proposed assignees", m.ID())
 				}
 
 			case statusWaitAssignee:
@@ -383,6 +383,15 @@ func main() {
 		onDone:                func(m mergeRequest) {},
 		beforeClean:           func(m mergeRequest) {},
 	}
+
+	web := NewWebserver(&eng)
+
+	go func() {
+		err := web.Run()
+		if err != nil {
+			log.Fatal("can not start web server: %v", err)
+		}
+	}()
 
 	go eng.Watcher()
 
