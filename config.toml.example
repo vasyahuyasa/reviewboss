@@ -1,5 +1,4 @@
 bot_token = "123:your_bot_token"
 proxy = "127.0.0.1:9050"
-re_match = "(?Um)https://gitlab\\.mysoft\\.ur:12356/(.+)/merge_requests/(\\d+)\\b"
 gitlab_token = "17F3sD1y_YiZMeD9pKn8"
-gitlab_url = ""
+gitlab_url = "https://gitlab.com:443"

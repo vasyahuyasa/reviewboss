@@ -23,11 +23,13 @@ const (
 	statusAssigned
 	statusDone
 
-	timeoutNew          = time.Minute
 	timeoutWaitAseegnee = time.Minute
 	timeoutAssigneed    = time.Minute
 
 	configFile = "config.toml"
+
+	apiPrefix         = "/api/v4"
+	mergeRequestReFmt = "(?Um)%s/(.+)/merge_requests/(\\d+)\\b"
 )
 
 var (
@@ -44,7 +46,6 @@ var (
 type config struct {
 	BotToken    string `toml:"bot_token"`
 	Proxy       string `toml:"proxy"`
-	ReMatch     string `toml:"re_match"`
 	GitlabToken string `toml:"gitlab_token"`
 	GitlabURL   string `toml:"gitlab_url"`
 }
@@ -190,12 +191,12 @@ func (eng *engine) Watcher() {
 						r := m.ProposeAssignees[0]
 						m.Assignee = &r
 
-						log.Printf("%q moved to status statusAssigned with reviwer %q", m.ID, m.Assignee.TelegramName)
+						log.Printf("%q moved to status statusAssigned with reviwer %q", m.ID(), m.Assignee.TelegramName)
 
 						eng.onStatusAssigned(m)
 					} else {
 						m.SetStatus(statusWaitAssignee)
-						log.Printf("%q keep in status statusWaitAssignee because merge request don't have proposed assignes", m.ID)
+						log.Printf("%q keep in status statusWaitAssignee because merge request don't have proposed assignes", m.ID())
 						eng.onNoProposedAssignees(m)
 					}
 
@@ -217,7 +218,7 @@ func (eng *engine) Watcher() {
 				eng.beforeClean(m)
 				// TODO: remove mergerequest
 			default:
-				log.Printf("merge request %q in statusNone state, removing", m.ID)
+				log.Printf("merge request %q in statusNone state, removing", m.ID())
 				// TODO: remove mergerequest
 			}
 		}
@@ -320,7 +321,8 @@ func main() {
 	}
 
 	// regular expression for extract gitlab links
-	reMergeRequest := regexp.MustCompile(cfg.ReMatch)
+	reStr := fmt.Sprintf(mergeRequestReFmt, regexp.QuoteMeta(cfg.GitlabURL))
+	reMergeRequest := regexp.MustCompile(reStr)
 
 	// telegram bot
 	var httpClient *http.Client
@@ -346,7 +348,11 @@ func main() {
 	// gitlab api
 	api := gitlabapi.NewClient(&http.Client{}, cfg.GitlabToken)
 	if cfg.GitlabURL != "" {
-		api.SetBaseURL(cfg.GitlabURL)
+		baseURL := cfg.GitlabURL + apiPrefix
+		err = api.SetBaseURL(baseURL)
+		if err != nil {
+			log.Fatalf("can not set gitlb base url to %q: %v", baseURL, err)
+		}
 	}
 	git := &gitlab{
 		api: api,
@@ -389,7 +395,7 @@ func main() {
 	go func() {
 		err := web.Run()
 		if err != nil {
-			log.Fatal("can not start web server: %v", err)
+			log.Fatalf("can not start web server: %v", err)
 		}
 	}()
 
@@ -464,7 +470,7 @@ func main() {
 
 						err = git.Assign(m.GitlabProject, m.GitlabMergeRequesetID, m.Assignee.GitlabID)
 						if err != nil {
-							log.Printf("can not assign %q to merge request %q: %v", m.Assignee.TelegramName, m.ID, err)
+							log.Printf("can not assign %q to merge request %q: %v", m.Assignee.TelegramName, m.ID(), err)
 						}
 					}
 
