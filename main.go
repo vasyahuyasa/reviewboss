@@ -3,17 +3,16 @@ package main
 import (
 	"errors"
 	"fmt"
+	"github.com/BurntSushi/toml"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+	gitlabapi "github.com/xanzy/go-gitlab"
+	"golang.org/x/net/proxy"
 	"log"
 	"net/http"
 	"regexp"
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/BurntSushi/toml"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
-	gitlabapi "github.com/xanzy/go-gitlab"
-	"golang.org/x/net/proxy"
 )
 
 const (
@@ -22,9 +21,10 @@ const (
 	statusWaitAssignee
 	statusAssigned
 	statusDone
+	statusClosed
 
 	timeoutWaitAseegnee = time.Minute
-	timeoutAssigneed    = time.Minute
+	timeoutAssigned     = time.Hour
 
 	configFile = "config.toml"
 
@@ -97,18 +97,14 @@ type engine struct {
 	// waitAssegnee -> assigned
 	onStatusAssigned func(m mergeRequest)
 
-	// waitAssegnee -> waitAssegnee because no on to assign
-	onNoProposedAssignees func(m mergeRequest)
+	// assigned -> assigned (check merge request status and notify reviwer about merge request)
+	onReviewTimeout func(m mergeRequest)
 
 	// assigned -> done
 	onDone func(m mergeRequest)
 
 	// before clean done
 	beforeClean func(m mergeRequest)
-}
-
-type gitlab struct {
-	api *gitlabapi.Client
 }
 
 func (input *mergeRequestInput) ID() string {
@@ -145,6 +141,7 @@ func (eng *engine) GetMergeRequest(id string) (mergeRequest, bool) {
 	return m, ok
 }
 
+// Watcher is periodicaly check merge request status and some action
 func (eng *engine) Watcher() {
 	for eng.running {
 		eng.mu.Lock()
@@ -197,17 +194,19 @@ func (eng *engine) Watcher() {
 					} else {
 						m.SetStatus(statusWaitAssignee)
 						log.Printf("%q keep in status statusWaitAssignee because merge request don't have proposed assignes", m.ID())
-						eng.onNoProposedAssignees(m)
+						// TODO: do something if no assignies
 					}
 
 					eng.mergeRequests[id] = m
 				}
 			case statusAssigned:
-				if timeout >= timeoutAssigneed {
+				if timeout >= timeoutAssigned {
 					// TODO: check merge request status and maybe set done
 					// if mr.Done {
 					//     m.SetStatus(statusDone)
 					// }
+					eng.onReviewTimeout(m)
+
 					if false {
 						m.SetStatus(statusDone)
 						eng.mergeRequests[id] = m
@@ -240,44 +239,6 @@ func (eng *engine) Shutdown() error {
 	}
 
 	return nil
-}
-
-func (git *gitlab) Assign(project string, mergeRequest int, assigneeID int) error {
-	_, _, err := git.api.MergeRequests.UpdateMergeRequest(project, mergeRequest, &gitlabapi.UpdateMergeRequestOptions{
-		AssigneeID: &assigneeID,
-	})
-
-	return err
-}
-
-func (git *gitlab) ProjectUserID(project, username string) (int, error) {
-	users, _, err := git.api.Projects.ListProjectsUsers(project, &gitlabapi.ListProjectUserOptions{
-		Search: &username,
-	})
-	if err != nil {
-		return 0, err
-	}
-
-	if len(users) == 0 {
-		return 0, errors.New("user have no access to project")
-	}
-
-	return users[0].ID, nil
-}
-
-// MergeRequestInfo return title and changed file count for merge request
-func (git *gitlab) MergeRequestInfo(project string, mergeRequest int) (string, int, error) {
-	mr, _, err := git.api.MergeRequests.GetMergeRequestChanges(project, mergeRequest)
-	if err != nil {
-		return "", 0, err
-	}
-
-	cnt, err := strconv.Atoi(mr.ChangesCount)
-	if err != nil {
-		return "", 0, fmt.Errorf("can not parse number of changes for merge request: %w", err)
-	}
-
-	return mr.Title, cnt, nil
 }
 
 func extractMergeLinks(s string, re *regexp.Regexp) []mergeRequestInput {
@@ -363,32 +324,56 @@ func main() {
 		running:       true,
 		done:          make(chan interface{}),
 		mergeRequests: map[string]mergeRequest{},
-
-		onStatusWaitAssignee: func(m mergeRequest) {
-			text := fmt.Sprintf("%s\nФайлов: %d", m.GitlabTitle, m.GitlabFileCount)
-			for i, r := range m.ProposeAssignees {
-				if i == 0 {
-					text += "\n\n*Кандидаты на проведение ревью:*"
-				}
-				text += fmt.Sprintf("\n%d. %s", i+1, r.TelegramName)
-			}
-
-			msg := tgbotapi.NewMessage(m.TelegramChatID, text)
-			msg.ParseMode = "markdown"
-			msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{
-				tgbotapi.NewInlineKeyboardButtonData("Я возьму", m.ID()),
-			})
-			msg.ReplyToMessageID = m.TelegramMessageID
-			_, err := bot.Send(msg)
-			if err != nil {
-				log.Printf("can not send message to channel %d: %v", m.TelegramChatID, err)
-			}
-		},
-		onStatusAssigned:      func(m mergeRequest) {},
-		onNoProposedAssignees: func(m mergeRequest) {},
-		onDone:                func(m mergeRequest) {},
-		beforeClean:           func(m mergeRequest) {},
 	}
+
+	eng.onStatusWaitAssignee = func(m mergeRequest) {
+		text := fmt.Sprintf("%s\nФайлов: %d", m.GitlabTitle, m.GitlabFileCount)
+		for i, r := range m.ProposeAssignees {
+			if i == 0 {
+				text += "\n\n*Кандидаты на проведение ревью:*"
+			}
+			text += fmt.Sprintf("\n%d. %s", i+1, r.TelegramName)
+		}
+
+		msg := tgbotapi.NewMessage(m.TelegramChatID, text)
+		msg.ParseMode = "markdown"
+		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardButtonData("Я возьму", m.ID()),
+		})
+		msg.ReplyToMessageID = m.TelegramMessageID
+		_, err := bot.Send(msg)
+		if err != nil {
+			log.Printf("can not send message to channel %d: %v", m.TelegramChatID, err)
+		}
+	}
+	eng.onStatusAssigned = func(m mergeRequest) {}
+	eng.onReviewTimeout = func(m mergeRequest) {
+		gitMerge, err := git.MergeRequestInfo(m.GitlabProject, m.GitlabMergeRequesetID)
+		if err != nil {
+			log.Printf("can not fetch merge request %q: %v", m.ID(), err)
+			return
+		}
+
+		if gitMerge.State == mergeStateClosed {
+			m.SetStatus(statusClosed)
+			eng.mergeRequests[m.ID()] = m
+			return
+		}
+
+		if gitMerge.State == mergeStateMerged {
+			m.SetStatus(statusDone)
+			eng.mergeRequests[m.ID()] = m
+			return
+		}
+
+		// merge request still opened
+		// notify reviwer to check it
+		// TODO: notify reviwer back to merge request
+
+	}
+
+	eng.onDone = func(m mergeRequest) {}
+	eng.beforeClean = func(m mergeRequest) {}
 
 	web := NewWebserver(&eng)
 
@@ -417,7 +402,7 @@ func main() {
 				log.Println("From", update.Message.From.String(), update.Message.From.ID)
 
 				for _, input := range extractMergeLinks(update.Message.Text, reMergeRequest) {
-					title, count, err := git.MergeRequestInfo(input.gitlabProject, input.gitlabMergeRequestID)
+					gitMerge, err := git.MergeRequestInfo(input.gitlabProject, input.gitlabMergeRequestID)
 					if err != nil {
 						log.Printf("can not retrive merge request info: %v", err)
 					}
@@ -435,8 +420,8 @@ func main() {
 						Link:                  input.link,
 						GitlabProject:         input.gitlabProject,
 						GitlabMergeRequesetID: input.gitlabMergeRequestID,
-						GitlabTitle:           title,
-						GitlabFileCount:       count,
+						GitlabTitle:           gitMerge.Title,
+						GitlabFileCount:       gitMerge.Changes,
 					})
 
 					if err != nil {
