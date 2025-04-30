@@ -1,6 +1,8 @@
 package domain
 
-import "time"
+import (
+	"time"
+)
 
 type MRState string
 
@@ -21,12 +23,26 @@ const (
 	StateMerged                MRState = "merged"
 )
 
+type Rewive struct{}
+
+type Reviwer struct{}
+
+type NotificationChannel interface {
+	BroadcastMrRegistered() error
+	BroadcastProposedReviwer(author Reviwer) error
+	BroadcastNoReviwers() error
+}
+
+type MrID string
+
 type MergeRequest struct {
-	ID               string
-	RepoID           string
-	Author           string
-	State            MRState
-	AssignedReviewer string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	id               MrID
+	reviwe           *Rewive
+	reviwer          *Reviwer
+	state            MRState
+	assignedReviewer string
+	createdAt        time.Time
+	updatedAt        time.Time
+
+	channel NotificationChannel
 }
