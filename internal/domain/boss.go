@@ -25,11 +25,11 @@ func (b *Boss) AddMR(mr MergeRequest) error {
 	return nil
 }
 
-func (b *Boss) ReviewerDeclined(mrid MrID, reviwer Reviwer) error {
+func (b *Boss) ReviewerDeclined(mrid MrID, reviwer Reviewer) error {
 	return nil
 }
 
-func (b *Boss) AssignReviwer(mrid MrID, reviwer Reviwer) error {
+func (b *Boss) AssignReviwer(mrid MrID, reviwer Reviewer) error {
 	return nil
 }
 

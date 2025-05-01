@@ -25,12 +25,26 @@ const (
 
 type Rewive struct{}
 
-type Reviwer struct{}
+type Reviewer struct{}
 
 type NotificationChannel interface {
 	BroadcastMrRegistered() error
-	BroadcastProposedReviwer(author Reviwer) error
-	BroadcastNoReviwers() error
+	BroadcastProposedReviewer(Reviewer) error
+	BroadcastNoReviewers() error
+	BroadcastAssignReviewer(Reviewer) error
+	BroadcastReviewStatus() error
+}
+
+type MrRemoteStatus string
+
+const (
+	StatusOpened MrRemoteStatus = "opened"
+	StatusMerged MrRemoteStatus = "merged"
+)
+
+type RemoteStorage interface {
+	AssignReviewer(Reviewer) error
+	GetStatus() (MrRemoteStatus, error)
 }
 
 type MrID string
@@ -38,11 +52,12 @@ type MrID string
 type MergeRequest struct {
 	id               MrID
 	reviwe           *Rewive
-	reviwer          *Reviwer
+	reviewer         *Reviewer
 	state            MRState
-	assignedReviewer string
+	assignedReviewer *Reviewer
 	createdAt        time.Time
 	updatedAt        time.Time
 
-	channel NotificationChannel
+	channel       NotificationChannel
+	remoteStorage RemoteStorage
 }
