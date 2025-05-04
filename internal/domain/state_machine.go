@@ -5,25 +5,18 @@ import (
 	"time"
 )
 
-// StateMachine defines operations for MR state transitions
-type StateMachine interface {
-	Current() MRState
-	CanTransitionTo(MRState) bool
-	TransitionTo(MRState) error
-}
-
 // MRStateMachine is a concrete implementation
-type MRStateMachine struct {
-	MR *MergeRequest
+type mrStateMachine struct {
+	mr *MergeRequest
 }
 
-func (sm *MRStateMachine) Current() MRState {
-	return sm.MR.State
+func (sm *mrStateMachine) current() MRState {
+	return sm.mr.state
 }
 
 // CanTransitionTo enforces allowed transitions
-func (sm *MRStateMachine) CanTransitionTo(next MRState) bool {
-	switch sm.MR.State {
+func (sm *mrStateMachine) CanTransitionTo(next MRState) bool {
+	switch sm.current() {
 	case StateNew:
 		return next == StateWaitingVoluntary
 	case StateWaitingVoluntary:
@@ -51,12 +44,12 @@ func (sm *MRStateMachine) CanTransitionTo(next MRState) bool {
 	}
 }
 
-func (sm *MRStateMachine) TransitionTo(next MRState) error {
+func (sm *mrStateMachine) TransitionTo(next MRState) error {
 	if !sm.CanTransitionTo(next) {
-		return fmt.Errorf("invalid transition from %s to %s", sm.MR.State, next)
+		return fmt.Errorf("invalid transition from %s to %s", sm.current(), next)
 	}
-	sm.MR.State = next
-	sm.MR.UpdatedAt = nowUnix()
+	sm.mr.setState(next)
+	sm.mr.setUpdatedAt(nowUnix())
 	return nil
 }
 

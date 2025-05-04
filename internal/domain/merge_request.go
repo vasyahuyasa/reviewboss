@@ -61,3 +61,15 @@ type MergeRequest struct {
 	channel       NotificationChannel
 	remoteStorage RemoteStorage
 }
+
+func (mr *MergeRequest) getID() MrID {
+	return mr.id
+}
+
+func (mr *MergeRequest) setState(state MRState) {
+	mr.state = state
+}
+
+func (mr *MergeRequest) setUpdatedAt(t time.Time) {
+	mr.updatedAt = t
+}
